@@ -54,7 +54,7 @@ Examples:
 	root.PersistentFlags().StringVarP(&rootDir, "root", "C", ".", "root directory to scan")
 	root.PersistentFlags().StringSliceVarP(&exts, "ext", "e", nil, "YAML file extensions (default .yaml,.yml)")
 
-	root.AddCommand(newFindCmd(), newGetCmd(), newSetCmd())
+	root.AddCommand(newFindCmd(), newGetCmd(), newSetCmd(), newUnsetCmd())
 	return root
 }
 
@@ -232,6 +232,71 @@ func newSetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVarP(&asString, "string", "s", false, "set the value as a string even if it looks numeric/boolean")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would change without writing files")
+	return cmd
+}
+
+func newUnsetCmd() *cobra.Command {
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use:     "unset <field> [<field> ...]",
+		Aliases: []string{"del", "delete"},
+		Short:   "Delete fields from one or more files",
+		Args:    cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			files, err := loadFiles()
+			if err != nil {
+				return err
+			}
+			// Resolve every target first so a bad field fails before any write.
+			var targets []store.Match
+			for _, arg := range args {
+				field := store.ParseField(arg)
+				candidates := store.InsideMatches(store.Resolve(files, field))
+				if !field.Wildcard {
+					m, ok := store.Deepest(candidates)
+					if !ok {
+						return fmt.Errorf("no file matched field %q", arg)
+					}
+					candidates = []store.Match{m}
+				}
+				if len(candidates) == 0 {
+					return fmt.Errorf("no file matched field %q", arg)
+				}
+				targets = append(targets, candidates...)
+			}
+
+			w := cmd.OutOrStdout()
+			changed := map[string]bool{}
+			for _, m := range targets {
+				if dryRun {
+					present, err := store.Present(m)
+					if err != nil {
+						return err
+					}
+					if present {
+						fmt.Fprintf(w, "would delete %s (%s)\n", m.ResolvedField(), m.File.Path)
+						changed[m.File.Path] = true
+					}
+					continue
+				}
+				existed, err := store.Unset(m)
+				if err != nil {
+					return err
+				}
+				if existed {
+					fmt.Fprintf(w, "deleted %s (%s)\n", m.ResolvedField(), m.File.Path)
+					changed[m.File.Path] = true
+				}
+			}
+			verb := "updated"
+			if dryRun {
+				verb = "would update"
+			}
+			fmt.Fprintf(w, "%s %d file(s)\n", verb, len(changed))
+			return nil
+		},
+	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would change without writing files")
 	return cmd
 }

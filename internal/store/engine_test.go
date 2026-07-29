@@ -136,6 +136,65 @@ func TestSetRefusesWholeDoc(t *testing.T) {
 	}
 }
 
+func TestUnsetDeletesFieldPreservingSiblings(t *testing.T) {
+	root := fixtureTree(t)
+	files := loadTree(t, root)
+	existed, err := Unset(resolveOne(t, files, "foo.bar.baz.config.port"))
+	if err != nil || !existed {
+		t.Fatalf("unset existed=%v err=%v", existed, err)
+	}
+	data, _ := os.ReadFile(filepath.Join(root, "foo/bar/baz.yaml"))
+	out := string(data)
+	if strings.Contains(out, "port:") {
+		t.Fatalf("port not deleted:\n%s", out)
+	}
+	if !strings.Contains(out, "enabled: false") || !strings.Contains(out, "# baz service") {
+		t.Fatalf("siblings/comments not preserved:\n%s", out)
+	}
+}
+
+func TestUnsetMissingFieldReportsFalse(t *testing.T) {
+	root := fixtureTree(t)
+	files := loadTree(t, root)
+	before, _ := os.ReadFile(filepath.Join(root, "services/api.yaml"))
+	m, _ := Deepest(Resolve(files, ParseField("services.api.replicas")))
+	existed, err := Unset(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if existed {
+		t.Fatal("missing field should report not existed")
+	}
+	after, _ := os.ReadFile(filepath.Join(root, "services/api.yaml"))
+	if string(before) != string(after) {
+		t.Fatalf("file changed on no-op delete:\n%s", string(after))
+	}
+}
+
+func TestUnsetPresentNullKey(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, "a.yaml")
+	if err := os.WriteFile(p, []byte("keep: 1\ngone:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := loadTree(t, root)
+	existed, err := Unset(resolveOne(t, files, "a.gone"))
+	if err != nil || !existed {
+		t.Fatalf("null key: existed=%v err=%v", existed, err)
+	}
+	data, _ := os.ReadFile(p)
+	if strings.Contains(string(data), "gone") {
+		t.Fatalf("null key not deleted:\n%s", string(data))
+	}
+}
+
+func TestUnsetRefusesWholeDoc(t *testing.T) {
+	files := loadTree(t, fixtureTree(t))
+	if _, err := Unset(resolveOne(t, files, "services.web")); err == nil {
+		t.Fatal("expected error deleting whole document")
+	}
+}
+
 func TestLiteralTyping(t *testing.T) {
 	cases := map[string]string{
 		"true":  "true",

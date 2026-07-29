@@ -93,6 +93,62 @@ func Set(m Match, value string, asString bool) error {
 	return writeFileAtomic(m.File.Path, []byte(out))
 }
 
+// Unset deletes the field at the match's in-file path and writes the file back
+// in place, preserving surrounding comments and key order. It reports whether
+// the field was present before deletion.
+func Unset(m Match) (bool, error) {
+	if len(m.InFile) == 0 {
+		return false, fmt.Errorf("%s: refusing to delete the entire document (%s); specify a field path",
+			m.File.Path, m.File.Prefix())
+	}
+	input, err := os.ReadFile(m.File.Path)
+	if err != nil {
+		return false, err
+	}
+	existed, err := hasKey(m, string(input))
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", m.File.Path, err)
+	}
+	if !existed {
+		return false, nil
+	}
+	out, err := eval(fmt.Sprintf("del(%s)", m.Expr()), string(input))
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", m.File.Path, err)
+	}
+	if err := writeFileAtomic(m.File.Path, []byte(out)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Present reports whether the leaf key of the match's in-file path exists in the
+// file, including keys whose value is null. It reads the file each call.
+func Present(m Match) (bool, error) {
+	if len(m.InFile) == 0 {
+		return false, nil
+	}
+	input, err := os.ReadFile(m.File.Path)
+	if err != nil {
+		return false, err
+	}
+	return hasKey(m, string(input))
+}
+
+// hasKey reports whether the leaf key of the match's in-file path is present in
+// the document, regardless of whether its value is null (unlike Exists, which
+// treats null as absent). This lets Unset skip files where nothing would change.
+func hasKey(m Match, input string) (bool, error) {
+	parent := Match{InFile: m.InFile[:len(m.InFile)-1]}
+	last := m.InFile[len(m.InFile)-1]
+	expr := fmt.Sprintf("%s | select(. != null) | has(%s)", parent.Expr(), quote(last))
+	out, err := eval(expr, input)
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(out, "true"), nil
+}
+
 // literal converts a raw command-line value into a yq expression literal.
 // Unless asString is set, values that look like booleans, null, integers or
 // floats are emitted unquoted so they land as the corresponding YAML types.
