@@ -13,11 +13,11 @@ func fileWith(prefix string) File {
 
 func TestMatchInside(t *testing.T) {
 	tests := []struct {
-		name    string
-		pat     string
-		pre     string
+		name     string
+		pat      string
+		pre      string
 		leftover []string
-		ok      bool
+		ok       bool
 	}{
 		{"exact literal path", "foo.bar.baz.config.port", "foo.bar.baz", []string{"config", "port"}, true},
 		{"exact prefix whole doc", "foo.bar.baz", "foo.bar.baz", nil, true},
@@ -27,6 +27,10 @@ func TestMatchInside(t *testing.T) {
 		{"single star one segment", "services.*.replicas", "services.web", []string{"replicas"}, true},
 		{"literal mismatch", "foo.qux.port", "foo.bar", nil, false},
 		{"doublestar trailing whole doc", "services.**", "services.web", nil, true},
+		{"doublestar then literal matching file's own segment, zero nesting", "a.**.two", "a.two", nil, true},
+		{"doublestar then literal matching file's own segment, one level nesting", "a.**.two", "a.b.two", nil, true},
+		{"doublestar then literal matching file's own segment, two levels nesting", "a.**.two", "a.b.c.two", nil, true},
+		{"doublestar then literal segment plus infile suffix, nested", "a.**.two.name", "a.b.c.two", []string{"name"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -96,6 +100,28 @@ func TestResolveAncestorMatch(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ancestors, []string{"foo.bar.baz"}) {
 		t.Fatalf("ancestor files = %#v, want [foo.bar.baz]", ancestors)
+	}
+}
+
+func TestResolveDoublestarAcrossMultipleNestingLevels(t *testing.T) {
+	// "two" is both a literal segment in the field and the final path segment
+	// of files nested at varying depths under "a". The field should resolve
+	// to each file's in-file "name" path regardless of how many segments "**"
+	// has to span to reach the literal "two".
+	files := []File{
+		fileWith("a.two"),
+		fileWith("a.b.two"),
+		fileWith("a.b.c.two"),
+	}
+	matches := InsideMatches(Resolve(files, ParseField("a.**.two.name")))
+	var got []string
+	for _, m := range matches {
+		got = append(got, m.File.Prefix()+"|"+m.Expr())
+	}
+	sort.Strings(got)
+	want := []string{"a.b.c.two|.name", "a.b.two|.name", "a.two|.name"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
 	}
 }
 

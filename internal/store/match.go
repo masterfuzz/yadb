@@ -68,7 +68,11 @@ func Resolve(files []File, field Field) []Match {
 
 // matchInside consumes all of pre using pat tokens and returns the leftover pat
 // tokens (the in-file path). It reports false when pat cannot cover the whole
-// prefix. "**" is greedy, consuming as many prefix segments as possible.
+// prefix. "**" consumes as few prefix segments as it needs to: it tries
+// smaller spans first so that literal segments following it can still match
+// real trailing prefix segments, only falling back to swallowing them (and
+// treating the rest of pat as an in-file path) once no literal match is
+// possible.
 func matchInside(pat, pre []string) ([]string, bool) {
 	if len(pre) == 0 {
 		// A trailing/leading "**" matches zero remaining segments.
@@ -82,7 +86,7 @@ func matchInside(pat, pre []string) ([]string, bool) {
 	}
 	switch pat[0] {
 	case "**":
-		for k := len(pre); k >= 0; k-- {
+		for k := 0; k <= len(pre); k++ {
 			if leftover, ok := matchInside(pat[1:], pre[k:]); ok {
 				return leftover, true
 			}
