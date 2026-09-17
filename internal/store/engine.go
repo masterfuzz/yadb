@@ -45,6 +45,25 @@ func Get(m Match) (string, error) {
 	return strings.TrimSuffix(out, "\n"), nil
 }
 
+// Keys returns the immediate child keys of the map at the match's in-file
+// path. Non-map values (scalars, sequences, null) yield no keys.
+func Keys(m Match) ([]string, error) {
+	input, err := os.ReadFile(m.File.Path)
+	if err != nil {
+		return nil, err
+	}
+	expr := m.Expr() + ` | select(tag == "!!map") | keys | .[]`
+	out, err := eval(expr, string(input))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", m.File.Path, err)
+	}
+	out = strings.TrimSuffix(out, "\n")
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 // Exists reports whether the match's in-file path is present and non-null.
 func Exists(m Match) (bool, error) {
 	input, err := os.ReadFile(m.File.Path)

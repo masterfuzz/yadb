@@ -47,19 +47,75 @@ Examples:
   yadb find  '**.replicas'                 # files that set replicas
   yadb find  'services.*.image=nginx'      # files where image == nginx
   yadb set   foo.bar.baz.config.port=9090  # set one value
-  yadb set   '**.enabled=true'             # set across many files`,
+  yadb set   '**.enabled=true'             # set across many files
+  yadb keys                                 # top-level namespace segments
+  yadb keys  foo.bar.baz.config             # keys available under a path`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVarP(&rootDir, "root", "C", ".", "root directory to scan")
 	root.PersistentFlags().StringSliceVarP(&exts, "ext", "e", nil, "YAML file extensions (default .yaml,.yml)")
 
-	root.AddCommand(newFindCmd(), newGetCmd(), newSetCmd(), newUnsetCmd())
+	root.AddCommand(newFindCmd(), newGetCmd(), newSetCmd(), newUnsetCmd(), newKeysCmd())
 	return root
 }
 
 func loadFiles() ([]store.File, error) {
 	return store.Scan(rootDir, exts)
+}
+
+func newKeysCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "keys [<path>]",
+		Short: "List the keys available directly under a path",
+		Long: `keys lists the immediate children of a dotted path: the next namespace
+segments contributed by directories and files below it, plus the map keys at
+that path inside any matching files. With no argument it lists the top-level
+segments of the namespace.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			files, err := loadFiles()
+			if err != nil {
+				return err
+			}
+			var arg string
+			if len(args) == 1 {
+				arg = args[0]
+			}
+			matches := store.Resolve(files, store.ParseField(arg))
+
+			seen := map[string]bool{}
+			var keys []string
+			add := func(k string) {
+				if k != "" && !seen[k] {
+					seen[k] = true
+					keys = append(keys, k)
+				}
+			}
+			for _, m := range matches {
+				if m.Ancestor {
+					add(m.Remainder[0])
+					continue
+				}
+				ks, err := store.Keys(m)
+				if err != nil {
+					return err
+				}
+				for _, k := range ks {
+					add(k)
+				}
+			}
+			if len(matches) == 0 {
+				return fmt.Errorf("no file matched path %q", arg)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintln(cmd.OutOrStdout(), k)
+			}
+			return nil
+		},
+	}
+	return cmd
 }
 
 func newFindCmd() *cobra.Command {

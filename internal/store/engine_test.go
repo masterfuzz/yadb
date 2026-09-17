@@ -213,3 +213,37 @@ func TestLiteralTyping(t *testing.T) {
 		t.Errorf("literal(42, asString) = %q, want \"42\"", got)
 	}
 }
+
+func TestKeys(t *testing.T) {
+	files := loadTree(t, fixtureTree(t))
+
+	// Map keys inside a file.
+	m := resolveOne(t, files, "foo.bar.baz.config")
+	keys, err := Keys(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(keys, ","), "port,enabled"; got != want {
+		t.Errorf("Keys(config) = %q, want %q", got, want)
+	}
+
+	// Top-level keys of a whole document.
+	m = resolveOne(t, files, "services.web")
+	keys, err = Keys(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(keys, ","), "name,image,replicas"; got != want {
+		t.Errorf("Keys(web) = %q, want %q", got, want)
+	}
+
+	// Scalars have no keys.
+	m = resolveOne(t, files, "services.web.name")
+	keys, err = Keys(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("Keys(scalar) = %v, want none", keys)
+	}
+}
