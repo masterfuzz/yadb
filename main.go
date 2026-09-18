@@ -64,6 +64,82 @@ func loadFiles() ([]store.File, error) {
 	return store.Scan(rootDir, exts)
 }
 
+// keysAt returns the sorted, deduplicated immediate children of a dotted path:
+// the next namespace segments below it plus map keys inside matching files.
+func keysAt(files []store.File, path string) ([]string, error) {
+	matches := store.Resolve(files, store.ParseField(path))
+	seen := map[string]bool{}
+	var keys []string
+	add := func(k string) {
+		if k != "" && !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	for _, m := range matches {
+		if m.Ancestor {
+			add(m.Remainder[0])
+			continue
+		}
+		ks, err := store.Keys(m)
+		if err != nil {
+			return nil, err
+		}
+		for _, k := range ks {
+			add(k)
+		}
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
+
+// completeField offers dotted-path completions for the partial field in
+// toComplete. Anything after an "=" is a value and is not completed.
+func completeField(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if strings.ContainsRune(toComplete, '=') {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	files, err := loadFiles()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
+	prefix, partial := "", toComplete
+	if i := strings.LastIndex(toComplete, "."); i >= 0 {
+		prefix, partial = toComplete[:i], toComplete[i+1:]
+	}
+	keys, err := keysAt(files, prefix)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
+	var out []string
+	directive := cobra.ShellCompDirectiveNoFileComp
+	for _, k := range keys {
+		if !strings.HasPrefix(k, partial) {
+			continue
+		}
+		if prefix != "" {
+			k = prefix + "." + k
+		}
+		// Append a dot to keys that have children so the shell inserts the
+		// separator and the user can immediately continue completing. Leaf
+		// keys stay bare and get the usual trailing space.
+		if children, err := keysAt(files, k); err == nil && len(children) > 0 {
+			k += "."
+			directive |= cobra.ShellCompDirectiveNoSpace
+		}
+		out = append(out, k)
+	}
+	return out, directive
+}
+
+// completeFirstField completes only the first positional argument.
+func completeFirstField(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	return completeField(cmd, args, toComplete)
+}
+
 func newKeysCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "keys [<path>]",
@@ -72,7 +148,8 @@ func newKeysCmd() *cobra.Command {
 segments contributed by directories and files below it, plus the map keys at
 that path inside any matching files. With no argument it lists the top-level
 segments of the namespace.`,
-		Args: cobra.MaximumNArgs(1),
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: completeFirstField,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := loadFiles()
 			if err != nil {
@@ -82,33 +159,13 @@ segments of the namespace.`,
 			if len(args) == 1 {
 				arg = args[0]
 			}
-			matches := store.Resolve(files, store.ParseField(arg))
-
-			seen := map[string]bool{}
-			var keys []string
-			add := func(k string) {
-				if k != "" && !seen[k] {
-					seen[k] = true
-					keys = append(keys, k)
-				}
-			}
-			for _, m := range matches {
-				if m.Ancestor {
-					add(m.Remainder[0])
-					continue
-				}
-				ks, err := store.Keys(m)
-				if err != nil {
-					return err
-				}
-				for _, k := range ks {
-					add(k)
-				}
-			}
-			if len(matches) == 0 {
+			if len(store.Resolve(files, store.ParseField(arg))) == 0 {
 				return fmt.Errorf("no file matched path %q", arg)
 			}
-			sort.Strings(keys)
+			keys, err := keysAt(files, arg)
+			if err != nil {
+				return err
+			}
 			for _, k := range keys {
 				fmt.Fprintln(cmd.OutOrStdout(), k)
 			}
@@ -121,9 +178,10 @@ segments of the namespace.`,
 func newFindCmd() *cobra.Command {
 	var asString bool
 	cmd := &cobra.Command{
-		Use:   "find <field>[=<value>]",
-		Short: "List files that have a field (optionally with a specific value)",
-		Args:  cobra.ExactArgs(1),
+		Use:               "find <field>[=<value>]",
+		Short:             "List files that have a field (optionally with a specific value)",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeFirstField,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := loadFiles()
 			if err != nil {
@@ -168,9 +226,10 @@ func newFindCmd() *cobra.Command {
 
 func newGetCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "get <field>",
-		Short: "Print the value of a field",
-		Args:  cobra.ExactArgs(1),
+		Use:               "get <field>",
+		Short:             "Print the value of a field",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeFirstField,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := loadFiles()
 			if err != nil {
@@ -228,9 +287,10 @@ func newGetCmd() *cobra.Command {
 func newSetCmd() *cobra.Command {
 	var asString, dryRun bool
 	cmd := &cobra.Command{
-		Use:   "set <field>=<value> [<field>=<value> ...]",
-		Short: "Set the value of fields in one or more files",
-		Args:  cobra.MinimumNArgs(1),
+		Use:               "set <field>=<value> [<field>=<value> ...]",
+		Short:             "Set the value of fields in one or more files",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeField,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := loadFiles()
 			if err != nil {
@@ -295,10 +355,11 @@ func newSetCmd() *cobra.Command {
 func newUnsetCmd() *cobra.Command {
 	var dryRun bool
 	cmd := &cobra.Command{
-		Use:     "unset <field> [<field> ...]",
-		Aliases: []string{"del", "delete"},
-		Short:   "Delete fields from one or more files",
-		Args:    cobra.MinimumNArgs(1),
+		Use:               "unset <field> [<field> ...]",
+		Aliases:           []string{"del", "delete"},
+		Short:             "Delete fields from one or more files",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeField,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := loadFiles()
 			if err != nil {
